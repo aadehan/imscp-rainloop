@@ -204,6 +204,8 @@ sub deleteMail
     return 0 unless $data->{'MAIL_TYPE'} =~ /_mail/;
 
     local $@;
+    local $CWD = $::imscpConfig{'GUI_ROOT_DIR'};
+
     eval {
         my $database = $::imscpConfig{'DATABASE_NAME'} . '_rainloop';
 
@@ -229,13 +231,12 @@ sub deleteMail
             # (Mimic RainLoop behavior)
             my $storageSubDir = substr( $email, 0, 2 ) =~ s/\@$//r;
             $storageSubDir .= ( '_' x ( 2-length( $storageSubDir ) ) );
-            my $storagePath = $storageRootDir . '/' . $storageType . '/'
-                . $storageSubDir . '/' . $email . '/';
+            my $storagePath = "$storageRootDir/$storageType/$storageSubDir/";
+	    my $emailStoragePath = $storagePath . "$email/";
 
-            iMSCP::Dir->new( dirname => $storagePath )->remove();
-            my $dir = iMSCP::Dir->new( dirname => $storageRootDir . '/'
-                . $storageType . '/' . $storageSubDir );
-            next unless $dir->isEmpty();
+            iMSCP::Dir->new( dirname => $emailStoragePath )->remove() if -d $emailStoragePath; 
+	    my $dir = iMSCP::Dir->new( dirname => $storagePath);
+            next unless (-d $storagePath && $dir->isEmpty());
             $dir->remove();
         }
     };
