@@ -154,9 +154,17 @@ sub uninstall
             "DROP DATABASE IF EXISTS `@{ [ $::imscpConfig{'DATABASE_NAME'} . '_rainloop' ] }`"
         );
 
-        my ( $databaseUser ) = @{ $self->{'dbh'}->selectcol_arrayref(
-            "SELECT `value` FROM `config` WHERE `name` = 'RAINLOOP_SQL_USER'"
-        ) };
+		my $databaseUser;
+        unless(exists $::imscpConfig{'SERVER_ID'}){
+        	( $databaseUser ) = @{ $self->{'dbh'}->selectcol_arrayref(
+            	"SELECT `value` FROM `config` WHERE `name`='RAINLOOP_SQL_USER'"
+            ) };
+        } else {
+        	( $databaseUser ) = @{ $self->{'dbh'}->selectcol_arrayref(
+            	"SELECT `value` FROM `config` WHERE `server_id`=? AND `name`='RAINLOOP_SQL_USER'",
+	    		undef, $::imscpConfig{'SERVER_ID'}
+        	) };
+        }
 
         if ( defined $databaseUser ) {
             $databaseUser = decryptRijndaelCBC(
@@ -172,9 +180,14 @@ sub uninstall
             }
         }
 
-        $self->{'dbh'}->do(
-            "DELETE FROM `config` WHERE `name` LIKE 'RAINLOOP_%'"
-        );
+		unless(exists $::imscpConfig{'SERVER_ID'}){
+            $self->{'dbh'}->do("DELETE FROM `config` WHERE `name` LIKE 'RAINLOOP_%'");
+        } else {
+        	$self->{'dbh'}->do(
+                "DELETE FROM `config` WHERE `server_id`=? AND `name` LIKE 'RAINLOOP_%'",
+            undef, $::imscpConfig{'SERVER_ID'}
+            );
+        }
 
         iMSCP::Dir->new(
             dirname => "$CWD/data/persistent/rainloop"
@@ -396,14 +409,18 @@ sub _buildConfigFiles
 
     local $@;
     my $rs = eval {
-        my %config = @{ $self->{'dbh'}->selectcol_arrayref(
-            "
-                SELECT `name`, `value`
-                FROM `config`
-                WHERE `name` LIKE 'RAINLOOP_%'
-            ",
-            { Columns => [ 1, 2 ] }
-        ) };
+    	my %config;
+        unless(exists $::imscpConfig{'SERVER_ID'}){
+        	%config = @{ $self->{'dbh'}->selectcol_arrayref(
+                "SELECT `name`, `value` FROM `config` WHERE `name` LIKE 'RAINLOOP_%'",
+                { Columns => [ 1, 2 ] }
+            ) };
+        } else {
+        	%config = @{ $self->{'dbh'}->selectcol_arrayref(
+                "SELECT `name`, `value` FROM `config` WHERE `server_id`=? AND `name` LIKE 'RAINLOOP_%'",
+                { Columns => [ 1, 2 ] }, $::imscpConfig{'SERVER_ID'}
+            ) };
+        }
 
         ( $config{'RAINLOOP_APP_SALT'} = decryptRijndaelCBC(
             $::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_APP_SALT'} // ''
@@ -427,28 +444,26 @@ sub _buildConfigFiles
         );
 
         # Save generated values in database (encrypted)
-        $self->{'dbh'}->do(
-            '
-                INSERT INTO `config` (`name`,`value`)
-                VALUES (?,?),(?,?),(?,?)
-                ON DUPLICATE KEY UPDATE `name` = `name`
-            ',
-            undef,
-            'RAINLOOP_APP_SALT',
-            encryptRijndaelCBC(
-                $::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_APP_SALT'}
-            ),
-            'RAINLOOP_SQL_USER',
-            encryptRijndaelCBC(
-                $::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_SQL_USER'}
-            ),
-            'RAINLOOP_SQL_USER_PASSWD',
-            encryptRijndaelCBC(
-                $::imscpDBKey,
-                $::imscpDBiv,
-                $config{'RAINLOOP_SQL_USER_PASSWD'}
-            )
+        my ($encSalt, $encUser, $encPasswd) = (
+        	encryptRijndaelCBC($::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_APP_SALT'}),
+            encryptRijndaelCBC($::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_SQL_USER'}),
+            encryptRijndaelCBC($::imscpDBKey, $::imscpDBiv, $config{'RAINLOOP_SQL_USER_PASSWD'})
         );
+        
+        unless(exists $::imscpConfig{'SERVER_ID'}){            
+            $self->{'dbh'}->do(
+                'INSERT INTO `config` (`name`,`value`) VALUES (?,?),(?,?),(?,?) ON DUPLICATE KEY UPDATE `name` = `name`',
+                undef, 'RAINLOOP_APP_SALT', $encSalt, 'RAINLOOP_SQL_USER', $encUser, 'RAINLOOP_SQL_USER_PASSWD', $encPasswd
+            );
+        } else {
+        	$self->{'dbh'}->do(
+                'INSERT INTO `config` (`server_id`, `name`,`value`) VALUES (?,?,?),(?,?,?),(?,?,?) ON DUPLICATE KEY UPDATE `name` = `name`',
+                undef,
+                $::imscpConfig{'SERVER_ID'}, 'RAINLOOP_APP_SALT', 		$encSalt,
+                $::imscpConfig{'SERVER_ID'}, 'RAINLOOP_SQL_USER', 		$encUser,
+                $::imscpConfig{'SERVER_ID'}, 'RAINLOOP_SQL_USER_PASSWD', $encPasswd
+            );
+        }
 
         # RainLoop SALT file
 
